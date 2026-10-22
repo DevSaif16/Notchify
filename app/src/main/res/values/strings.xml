@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Notchify</string>
+    <string name="a11y_description">Draws Notchify around your camera cutout. Notchify reads no screen content: this permission is only used to show the overlay above the status bar.</string>
+</resources>

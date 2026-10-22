@@ -1,0 +1,10 @@
+.gradle/
+.kotlin/
+build/
+/local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Nothing Glyph Matrix SDK: licensed, not redistributable. Download it yourself (see README).
+app/libs/*.aar
