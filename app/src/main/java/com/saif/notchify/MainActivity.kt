@@ -152,9 +152,9 @@ class MainActivity : Activity() {
             slider("Vertical", Prefs.OFFSET_Y, 40)
             slider("Size", Prefs.SIZE, 24)
             link("Reset") {
-                prefs.setInt(Prefs.OFFSET_X, 0)
-                prefs.setInt(Prefs.OFFSET_Y, 0)
-                prefs.setInt(Prefs.SIZE, 0)
+                prefs.reset(Prefs.OFFSET_X)
+                prefs.reset(Prefs.OFFSET_Y)
+                prefs.reset(Prefs.SIZE)
                 refreshers.forEach { it() }
             }
         }

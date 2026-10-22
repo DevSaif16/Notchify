@@ -27,6 +27,7 @@ import com.saif.notchify.IslandAction
 import com.saif.notchify.Kind
 import com.saif.notchify.Palette
 import com.saif.notchify.Progress
+import com.saif.notchify.R
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -270,8 +271,9 @@ class ExpandedView(
     }
 
     companion object {
-        private val TAG_STYLE = View.generateViewId()
-        private val TAG_ID = View.generateViewId()
+        // setTag(key, …) only accepts real resource ids; generated view ids crash it.
+        private val TAG_STYLE = R.id.tag_action_style
+        private val TAG_ID = R.id.tag_action_id
     }
 }
 

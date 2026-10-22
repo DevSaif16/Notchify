@@ -99,11 +99,19 @@ class IslandView(
     private var winHeight = 0
     private var winTouchable = false
 
-    /** The window moves as it resizes; re-place the shape against wherever the frame being drawn is. */
+    /**
+     * The window moves as it resizes; re-place the shape against wherever the frame being drawn is.
+     * Only when it actually moved: re-applying unconditionally invalidates, which schedules another
+     * frame, which runs this again (a 120 fps loop that burned a quarter of a core while idle).
+     */
     private val preDraw = ViewTreeObserver.OnPreDrawListener {
-        applyFrame()
+        if (originX() != appliedOrigin) applyFrame()
         true
     }
+    private var appliedOrigin = Float.NaN
+    private var appliedRadius = -1f
+    private var appliedW = -1
+    private var appliedH = -1
 
     init {
         addView(surface)
@@ -290,10 +298,23 @@ class IslandView(
         val h = max(1f, springH.value)
         val band = min(h, geo.compactH)
         val top = geo.cy - band / 2f
-        val left = originX() - springL.value
+        val origin = originX()
+        appliedOrigin = origin
+        val left = origin - springL.value
         surface.setLeftTopRightBottom(left.roundToInt(), top.roundToInt(), (left + w).roundToInt(), (top + h).roundToInt())
-        shape.cornerRadius = min(h / 2f, geo.expandedR)
-        surface.invalidateOutline()
+        // GradientDrawable and the outline invalidate even when nothing changed; only touch them on change.
+        val radius = min(h / 2f, geo.expandedR)
+        val sizeChanged = surface.width != appliedW || surface.height != appliedH
+        val radiusChanged = radius != appliedRadius
+        if (radiusChanged) {
+            shape.cornerRadius = radius
+            appliedRadius = radius
+        }
+        if (sizeChanged || radiusChanged) {
+            appliedW = surface.width
+            appliedH = surface.height
+            surface.invalidateOutline()
+        }
         surface.pivotX = springL.value
         surface.pivotY = band / 2f
         surface.scaleX = press.value

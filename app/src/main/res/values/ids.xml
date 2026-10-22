@@ -1,0 +1,5 @@
+<resources>
+    <!-- View tag keys for the expanded island's action buttons. -->
+    <item name="tag_action_style" type="id" />
+    <item name="tag_action_id" type="id" />
+</resources>

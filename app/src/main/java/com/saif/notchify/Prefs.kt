@@ -8,8 +8,9 @@ class Prefs(context: Context) {
 
     fun on(key: String): Boolean = sp.getBoolean(key, key !in OFF_BY_DEFAULT)
     fun set(key: String, value: Boolean) = sp.edit().putBoolean(key, value).apply()
-    fun int(key: String): Int = sp.getInt(key, 0)
+    fun int(key: String): Int = sp.getInt(key, DEFAULT_INTS[key] ?: 0)
     fun setInt(key: String, value: Int) = sp.edit().putInt(key, value).apply()
+    fun reset(key: String) = sp.edit().remove(key).apply()
 
     companion object {
         const val MEDIA = "media"
@@ -40,7 +41,10 @@ class Prefs(context: Context) {
         const val OFFSET_Y = "offset_y"
         const val SIZE = "size"
 
-        private val OFF_BY_DEFAULT = setOf(HEADS_UP_OWNED, LOCK_PREVIEWS, CALIBRATE, DRIVE_ALWAYS, SPEED, SYMMETRIC)
+        /** Hand-calibrated on the Nothing Phone (4a) Pro: the island hugs the lens with no visible rim. */
+        private val DEFAULT_INTS = mapOf(OFFSET_Y to -2, SIZE to -7)
+
+        private val OFF_BY_DEFAULT =setOf(HEADS_UP_OWNED, LOCK_PREVIEWS, CALIBRATE, DRIVE_ALWAYS, SPEED, SYMMETRIC)
 
         fun keyFor(kind: Kind): String = when (kind) {
             Kind.CALL, Kind.ALARM -> CALLS

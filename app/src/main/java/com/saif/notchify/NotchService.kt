@@ -113,6 +113,15 @@ class NotchService : AccessibilityService(), Hub.Listener, IslandView.Host,
         Hub.listener = this
     }
 
+    /** `adb shell dumpsys activity service com.saif.notchify/.NotchService` */
+    override fun dump(fd: java.io.FileDescriptor?, writer: java.io.PrintWriter, args: Array<out String>?) {
+        val g = view?.geo
+        writer.println("Notchify")
+        writer.println("  calibration: offsetX=${prefs.int(Prefs.OFFSET_X)} offsetY=${prefs.int(Prefs.OFFSET_Y)} size=${prefs.int(Prefs.SIZE)}")
+        writer.println("  hole: cx=${g?.cx} cy=${g?.cy} w=${g?.holeW} h=${g?.holeH}")
+        writer.println("  ranked=${ranked.map { it.key }} open=${open?.key} banner=${banner?.key} peek=$peekKey")
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
 
     override fun onInterrupt() = Unit
