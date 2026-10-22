@@ -1,6 +1,7 @@
 package com.saif.notchify
 
 import android.Manifest
+import android.app.NotificationManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -21,11 +22,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyDisplayInfo
@@ -38,15 +41,18 @@ import com.nothing.ketchum.GlyphMatrixObject
 
 /**
  * State and actions behind the control centre. Nothing here runs until the panel opens: [start]
- * registers the callbacks, [stop] drops them all. Android lets an ordinary app flip location (with
- * the adb-granted secure-settings permission), the torch and the Glyph matrix directly; Wi-Fi,
- * mobile data and Bluetooth can only be switched by the system, so those tiles open the system's
- * own one-tap panel instead.
+ * registers the callbacks, [stop] drops them all.
+ *
+ * Switched in place: mobile data (secure settings), location (secure settings), flashlight,
+ * Glyph light, Do Not Disturb (as the notification listener), brightness, media volume.
+ * Wi-Fi and Bluetooth: Android only lets the system switch those for apps built for current
+ * Android, so their tiles open the system's own one-tap popups.
  */
 class QuickControls(
     private val context: Context,
     private val torchOn: () -> Boolean,
     private val setTorch: (Boolean) -> Unit,
+    private val screenshot: () -> Unit,
     private val launch: (Intent) -> Unit,
 ) {
     var wifiOn = false; private set
@@ -57,6 +63,7 @@ class QuickControls(
     var btOn = false; private set
     var btDevices: List<String> = emptyList(); private set
     var locationOn = false; private set
+    var dndOn = false; private set
     var cameraInUse = false; private set
     var micInUse = false; private set
     var gpsInUse = false; private set
@@ -71,10 +78,11 @@ class QuickControls(
     private val location = context.getSystemService(LocationManager::class.java)
     private val audio = context.getSystemService(AudioManager::class.java)
     private val cameras = context.getSystemService(CameraManager::class.java)
+    private val notifications = context.getSystemService(NotificationManager::class.java)
     private val bluetooth = context.getSystemService(BluetoothManager::class.java)?.adapter
+    private val dataSub = SubscriptionManager.getDefaultDataSubscriptionId()
     private val telephony: TelephonyManager? = context.getSystemService(TelephonyManager::class.java)?.let { tm ->
-        val sub = SubscriptionManager.getDefaultDataSubscriptionId()
-        if (sub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) tm.createForSubscriptionId(sub) else tm
+        if (dataSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) tm.createForSubscriptionId(dataSub) else tm
     }
 
     fun listen(l: () -> Unit) = listeners.add(l)
@@ -97,6 +105,7 @@ class QuickControls(
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             addAction(LocationManager.MODE_CHANGED_ACTION)
+            addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
         }, Context.RECEIVER_NOT_EXPORTED)
         runCatching {
             connectivity.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), wifiCallback)
@@ -127,8 +136,10 @@ class QuickControls(
         wifiOn = wifi.isWifiEnabled
         locationOn = location.isLocationEnabled
         btOn = bluetooth?.isEnabled == true
+        dndOn = notifications.currentInterruptionFilter.let { it != NotificationManager.INTERRUPTION_FILTER_ALL && it != NotificationManager.INTERRUPTION_FILTER_UNKNOWN }
         readBluetoothDevices()
-        dataOn = runCatching { telephony?.isDataEnabled == true }.getOrDefault(false)
+        dataOn = Settings.Global.getInt(context.contentResolver, "mobile_data$dataSub", -1).takeIf { it >= 0 }?.let { it == 1 }
+            ?: runCatching { telephony?.isDataEnabled == true }.getOrDefault(false)
         carrier = telephony?.simOperatorName?.takeIf { it.isNotBlank() } ?: telephony?.networkOperatorName?.takeIf { it.isNotBlank() }
         if (netType == null) netType = runCatching { typeName(telephony?.dataNetworkType ?: 0, 0) }.getOrNull()
     }
@@ -143,7 +154,7 @@ class QuickControls(
     private val wifiCallback = object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
             val name = (caps.transportInfo as? WifiInfo)?.ssid?.trim('"')
-            ssid = name?.takeIf { it.isNotBlank() && it != WifiManager.UNKNOWN_SSID.trim('<', '>') && !it.startsWith("<") } ?: "Connected"
+            ssid = name?.takeIf { it.isNotBlank() && !it.startsWith("<") } ?: "Connected"
             changed()
         }
 
@@ -233,51 +244,108 @@ class QuickControls(
         }
     }
 
-    // ---- actions --------------------------------------------------------------------------------
+    private fun refreshSoon() = main.postDelayed({
+        readAll()
+        changed()
+    }, 350)
 
-    fun toggleWifi() {
-        @Suppress("DEPRECATION")
-        val done = runCatching { wifi.setWifiEnabled(!wifiOn) }.getOrDefault(false)
-        if (!done) launch(Intent(Settings.Panel.ACTION_WIFI))
-    }
+    // ---- tap: toggle ----------------------------------------------------------------------------
 
-    fun toggleData() = launch(Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY))
+    /** Opens the system's Wi-Fi popup: the one place Android allows Wi-Fi to be switched. */
+    fun tapWifi() = launch(Intent(Settings.Panel.ACTION_WIFI))
 
-    fun toggleBluetooth() {
-        if (!btOn && granted(Manifest.permission.BLUETOOTH_CONNECT)) {
-            launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+    /** Mobile data flips in place, through the setting the phone service itself listens to. */
+    fun tapData() {
+        val ok = HeadsUp.granted(context) && dataSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID && runCatching {
+            val v = if (dataOn) 0 else 1
+            Settings.Global.putInt(context.contentResolver, "mobile_data$dataSub", v)
+            Settings.Global.putInt(context.contentResolver, "mobile_data", v)
+        }.getOrDefault(false)
+        if (ok) {
+            dataOn = !dataOn
+            changed()
+            refreshSoon()
         } else {
-            launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+            launch(Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY))
         }
     }
 
-    fun toggleLocation() {
+    /** Turning on asks once in a system dialog; turning off needs the system Bluetooth page. */
+    fun tapBluetooth() = launch(
+        if (!btOn) Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE) else Intent(Settings.ACTION_BLUETOOTH_SETTINGS),
+    )
+
+    fun tapLocation() {
         val ok = HeadsUp.granted(context) && runCatching {
-            Settings.Secure.putInt(context.contentResolver, Settings.Secure.LOCATION_MODE,
-                if (locationOn) Settings.Secure.LOCATION_MODE_OFF else Settings.Secure.LOCATION_MODE_HIGH_ACCURACY)
+            Settings.Secure.putInt(
+                context.contentResolver, Settings.Secure.LOCATION_MODE,
+                if (locationOn) Settings.Secure.LOCATION_MODE_OFF else Settings.Secure.LOCATION_MODE_HIGH_ACCURACY,
+            )
         }.getOrDefault(false)
-        if (!ok) launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-        main.postDelayed({
-            readAll()
+        if (ok) {
+            locationOn = !locationOn
             changed()
-        }, 300)
+            refreshSoon()
+        } else {
+            launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        }
     }
 
-    fun toggleTorch() {
+    fun tapTorch() {
         setTorch(!torchOn())
         main.postDelayed({ changed() }, 150)
     }
 
-    fun openSettings(what: String) = launch(
-        Intent(
-            when (what) {
-                "wifi" -> Settings.ACTION_WIFI_SETTINGS
-                "data" -> Settings.ACTION_DATA_ROAMING_SETTINGS
-                "bt" -> Settings.ACTION_BLUETOOTH_SETTINGS
-                else -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
-            },
-        ),
+    fun tapDnd() {
+        val listener = NotificationService.instance
+        if (listener == null) {
+            launch(Intent(Settings.ACTION_ZEN_MODE_PRIORITY_SETTINGS))
+            return
+        }
+        listener.requestInterruptionFilter(
+            if (dndOn) NotificationListenerService.INTERRUPTION_FILTER_ALL else NotificationListenerService.INTERRUPTION_FILTER_PRIORITY,
+        )
+        dndOn = !dndOn
+        changed()
+    }
+
+    fun tapScreenshot() = screenshot()
+
+    // ---- long press: the system popup / page ----------------------------------------------------
+
+    fun more(what: String) = launch(
+        when (what) {
+            "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
+            "data" -> Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+            "bt" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+            "dnd" -> Intent(Settings.ACTION_ZEN_MODE_PRIORITY_SETTINGS)
+            else -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+        },
     )
+
+    // ---- sliders --------------------------------------------------------------------------------
+
+    val brightness: Float
+        get() = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255f
+
+    /** Needs "Modify system settings"; the first drag without it opens that page instead. */
+    fun setBrightness(f: Float): Boolean {
+        if (!Settings.System.canWrite(context)) {
+            launch(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${context.packageName}")))
+            return false
+        }
+        return runCatching {
+            Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, (f.coerceIn(0.01f, 1f) * 255).toInt())
+        }.getOrDefault(false)
+    }
+
+    val volume: Float
+        get() = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+
+    fun setVolume(f: Float) {
+        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        runCatching { audio.setStreamVolume(AudioManager.STREAM_MUSIC, (f.coerceIn(0f, 1f) * max).toInt(), 0) }
+    }
 }
 
 /**
@@ -290,11 +358,12 @@ class GlyphLight(private val context: Context, private val onChange: () -> Unit)
         private set
     private var manager: GlyphMatrixManager? = null
 
-    val available: Boolean
-        get() = runCatching {
+    val available: Boolean by lazy {
+        runCatching {
             context.packageManager.getPackageInfo("com.nothing.thirdparty", 0)
             Common.is25111p() || Common.is23112()
         }.getOrDefault(false)
+    }
 
     fun toggle() = if (on) off() else light()
 

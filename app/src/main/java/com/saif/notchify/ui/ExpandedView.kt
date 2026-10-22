@@ -42,7 +42,7 @@ class ExpandedView(
     private val onAction: (IslandAction) -> Unit,
     onSelect: (String) -> Unit,
 ) : LinearLayout(context), Bindable {
-    private val top = HoleRow(context)
+    private val top = HoleRow(context) { onSelect(CONTROLS_KEY) }
     private val body = LinearLayout(context)
     private val art = ImageView(context)
     private val title = TextView(context)
@@ -68,7 +68,7 @@ class ExpandedView(
     init {
         orientation = VERTICAL
         setWillNotDraw(false)
-        setPadding(dpi(20f), 0, dpi(20f), dpi(18f))
+        setPadding(dpi(18f), 0, dpi(18f), dpi(14f))
         addView(top, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
         body.orientation = HORIZONTAL
@@ -88,22 +88,24 @@ class ExpandedView(
         addView(body, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(2f) })
 
         addView(nav, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(4f) })
-        for (v in listOf(stages, segments, call, torch, controls)) {
-            addView(v, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(14f) })
+        for (v in listOf(stages, segments, call, torch)) {
+            addView(v, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
         }
-        addView(progress, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(14f) })
+        // The control centre has no body above it: it starts right under the camera row.
+        addView(controls, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(2f) })
+        addView(progress, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
 
         actions.orientation = HORIZONTAL
         actions.gravity = Gravity.CENTER
-        addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
-        addView(others, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(14f) })
+        addView(actions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(10f) })
+        addView(others, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
     }
 
     override fun bind(island: Island, geo: Geometry) = bind(island, geo, emptyList())
 
     fun bind(island: Island, geo: Geometry, otherIslands: List<Island>) {
         val sameIsland = island.key == shownKey
-        top.bind(island, geo)
+        top.bind(island, geo, showControls = island.info !is Info.Controls)
 
         val info = island.info
         val isNav = info is Info.Nav
@@ -157,7 +159,8 @@ class ExpandedView(
         if (p != null) progress.bind(p, if (island.kind == Kind.MEDIA) island.accent else Palette.WHITE)
 
         bindActions(island.actions)
-        others.bind(otherIslands, withControls = info !is Info.Controls)
+        others.visibility = if (otherIslands.isEmpty()) GONE else VISIBLE
+        others.bind(otherIslands, withControls = false)
 
         glowColor = island.accent
         glowing = island.kind == Kind.MEDIA
@@ -277,10 +280,24 @@ class ExpandedView(
     }
 }
 
-/** First row of the expanded island: app on the left of the camera, status on the right, never under it. */
-class HoleRow(context: Context) : ViewGroup(context) {
+/**
+ * First row of the expanded island: app on the left of the camera, status and the control-centre
+ * button on the right, never under the camera.
+ */
+class HoleRow(context: Context, onControls: () -> Unit) : ViewGroup(context) {
     private var geo: Geometry? = null
     private val icon = ImageView(context)
+    private val controls = ImageView(context).apply {
+        show(context.getDrawable(R.drawable.ic_controls), Island.Shape.NONE, Palette.WHITE)
+        val p = dpi(7f)
+        setPadding(p, p, p, p)
+        background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), pill(Palette.CHIP), null)
+        contentDescription = "Controls"
+        setOnClickListener {
+            it.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            onControls()
+        }
+    }
     private val label = TextView(context).apply {
         style(13f, Palette.TEXT2, 500)
         isSingleLine = true
@@ -296,14 +313,16 @@ class HoleRow(context: Context) : ViewGroup(context) {
         addView(icon)
         addView(label)
         addView(right)
+        addView(controls)
     }
 
-    fun bind(island: Island, geo: Geometry) {
+    fun bind(island: Island, geo: Geometry, showControls: Boolean) {
         this.geo = geo
         icon.show(island.appIcon, Island.Shape.ROUNDED, null)
         icon.visibility = if (island.appIcon == null) GONE else VISIBLE
         label.text = island.appLabel
         right.text = island.topRight
+        controls.visibility = if (showControls) VISIBLE else GONE
         requestLayout()
     }
 
@@ -313,14 +332,18 @@ class HoleRow(context: Context) : ViewGroup(context) {
         val half = (w / 2f - g.holeW / 2f - dp(12f)).roundToInt()
         val iconSize = dpi(18f)
         icon.measure(exactly(iconSize), exactly(iconSize))
+        val button = dpi(30f)
+        controls.measure(exactly(button), exactly(button))
+        val buttonSpace = if (controls.visibility == GONE) 0 else button + dpi(8f)
         val iconSpace = if (icon.visibility == GONE) 0 else iconSize + dpi(7f)
         label.measure(atMost(max(0, half - iconSpace)), UNSPECIFIED)
-        right.measure(atMost(half), UNSPECIFIED)
+        right.measure(atMost(max(0, half - buttonSpace)), UNSPECIFIED)
         setMeasuredDimension(w, g.compactH.roundToInt())
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val h = b - t
+        val w = r - l
         var x = 0
         if (icon.visibility != GONE) {
             val s = icon.measuredWidth
@@ -328,8 +351,14 @@ class HoleRow(context: Context) : ViewGroup(context) {
             x = s + dpi(7f)
         }
         label.layout(x, (h - label.measuredHeight) / 2, x + label.measuredWidth, (h + label.measuredHeight) / 2)
+        var end = w
+        if (controls.visibility != GONE) {
+            val s = controls.measuredWidth
+            controls.layout(w - s, (h - s) / 2, w, (h + s) / 2)
+            end = w - s - dpi(8f)
+        }
         val rw = right.measuredWidth
-        right.layout(r - l - rw, (h - right.measuredHeight) / 2, r - l, (h + right.measuredHeight) / 2)
+        right.layout(end - rw, (h - right.measuredHeight) / 2, end, (h + right.measuredHeight) / 2)
     }
 }
 

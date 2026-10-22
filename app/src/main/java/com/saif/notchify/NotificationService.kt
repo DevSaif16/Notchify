@@ -238,14 +238,16 @@ class NotificationService : NotificationListenerService() {
             (type == 0 && answer != null && !ex.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
         val start = if (incoming) null else callStart(sbn)
         val phone = getDrawable(R.drawable.ic_call)!!
-        val actions = buildList {
+        // Ringing: decline / answer as big buttons. Ongoing: hang-up lives inside the call controls.
+        val actions = if (!incoming) emptyList() else buildList {
             decline?.let { pi ->
                 add(IslandAction(IslandAction.Style.DECLINE, icon = getDrawable(R.drawable.ic_call_end), id = "end") { pi.sendFromIsland(this@NotificationService) })
             }
-            if (incoming) answer?.let { pi ->
+            answer?.let { pi ->
                 add(IslandAction(IslandAction.Style.ACCEPT, icon = phone, id = "answer") { pi.sendFromIsland(this@NotificationService) })
             }
         }
+        val hangUp = decline?.let { pi -> { pi.sendFromIsland(this@NotificationService) } }
         val tap = tapFor(sbn)
         return Island(
             key = sbn.key, kind = Kind.CALL, accent = Palette.GREEN,
@@ -259,7 +261,7 @@ class NotificationService : NotificationListenerService() {
             art = avatar ?: phone, artShape = if (avatar != null) Island.Shape.CIRCLE else Island.Shape.NONE,
             artTint = if (avatar != null) null else Palette.GREEN,
             bigTrailing = start != null,
-            info = if (incoming) null else Info.Call(tap),
+            info = if (incoming) null else Info.Call(tap, hangUp),
             actions = actions, tap = tap, autoExpand = incoming,
             since = start ?: System.currentTimeMillis(), sig = raw,
         )

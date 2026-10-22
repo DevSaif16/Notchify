@@ -21,6 +21,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Brightness slider (the user grants "Modify system settings" once). -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Nothing Glyph Matrix SDK (the LED matrix on the back). -->
     <uses-permission android:name="com.nothing.ketchum.permission.ENABLE" />

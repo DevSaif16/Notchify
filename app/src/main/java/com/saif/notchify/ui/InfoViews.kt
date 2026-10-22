@@ -143,7 +143,7 @@ class NavHudView(context: Context) : LinearLayout(context) {
     }
 }
 
-/** Round toggle with a label underneath, as in the iOS call screen. */
+/** Round button with a label underneath, as in the iOS call screen. Icon and label stay centred together. */
 private class ControlButton(context: Context) : LinearLayout(context) {
     val circle = ImageView(context)
     val label = TextView(context)
@@ -151,20 +151,23 @@ private class ControlButton(context: Context) : LinearLayout(context) {
     init {
         orientation = VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
-        val s = dpi(52f)
-        val pad = dpi(14f)
+        val s = dpi(56f)
+        val pad = dpi(16f)
         circle.setPadding(pad, pad, pad, pad)
         addView(circle, LayoutParams(s, s))
-        label.style(11f, Palette.TEXT2, 500)
+        label.style(11.5f, Palette.TEXT2, 500)
         label.isSingleLine = true
-        addView(label, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(5f) })
+        label.gravity = Gravity.CENTER
+        addView(label, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(6f) })
     }
 
-    fun set(icon: Int, text: String, active: Boolean) {
-        circle.show(context.getDrawable(icon), Island.Shape.NONE, if (active) 0xFF000000.toInt() else Palette.WHITE)
+    fun set(icon: Int, text: String, active: Boolean, fill: Int? = null) {
+        val bgColor = fill ?: if (active) Palette.WHITE else Palette.CHIP
+        val fg = if (fill == null && active) 0xFF000000.toInt() else Palette.WHITE
+        circle.show(context.getDrawable(icon), Island.Shape.NONE, fg)
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(if (active) Palette.WHITE else Palette.CHIP)
+            setColor(bgColor)
         }
         circle.background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), bg, null)
         label.text = text
@@ -172,39 +175,60 @@ private class ControlButton(context: Context) : LinearLayout(context) {
 }
 
 /**
- * Controls for the call in progress: mic, audio route (phone, speaker, Bluetooth, headset), the
- * call screen's keypad and call volume. Works for cellular and VoIP calls alike, through the
- * system audio manager rather than any one dialer.
+ * Controls for the call in progress, in one row: mute, audio route (tap cycles phone → speaker →
+ * Bluetooth → headset), keypad and end, with a slim call-volume bar under it. Works for cellular
+ * and VoIP calls alike, through the system audio manager rather than any one dialer.
  */
 class CallControlsView(context: Context) : LinearLayout(context) {
     private val am = context.getSystemService(AudioManager::class.java)
-    private val buttons = LinearLayout(context)
+    private val mute = ControlButton(context)
+    private val route = ControlButton(context)
+    private val keypad = ControlButton(context)
+    private val end = ControlButton(context)
     private val volume = ScrubBar(context)
-    private var openCallScreen: (() -> Unit)? = null
+    private var info: Info.Call? = null
 
     init {
         orientation = VERTICAL
-        buttons.orientation = HORIZONTAL
-        buttons.gravity = Gravity.CENTER
-        addView(buttons, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        val row = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        for (b in listOf(mute, route, keypad, end)) row.addView(b, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        addView(row, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         val vol = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        vol.addView(volumeButton(R.drawable.ic_volume_down, AudioManager.ADJUST_LOWER), LayoutParams(dpi(40f), dpi(40f)))
-        vol.addView(volume, LayoutParams(0, dpi(24f), 1f).apply { marginStart = dpi(8f); marginEnd = dpi(8f) })
-        vol.addView(volumeButton(R.drawable.ic_speaker, AudioManager.ADJUST_RAISE), LayoutParams(dpi(40f), dpi(40f)))
-        addView(vol, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
+        vol.addView(volumeButton(R.drawable.ic_volume_down, AudioManager.ADJUST_LOWER), LayoutParams(dpi(36f), dpi(36f)))
+        vol.addView(volume, LayoutParams(0, dpi(22f), 1f).apply { marginStart = dpi(6f); marginEnd = dpi(6f) })
+        vol.addView(volumeButton(R.drawable.ic_speaker, AudioManager.ADJUST_RAISE), LayoutParams(dpi(36f), dpi(36f)))
+        addView(vol, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(8f) })
+
+        mute.circle.setOnClickListener { press(it) { am.isMicrophoneMute = !am.isMicrophoneMute } }
+        route.circle.setOnClickListener { press(it) { nextRoute() } }
+        keypad.circle.setOnClickListener { press(it) { info?.openCallScreen?.invoke() } }
+        end.circle.setOnClickListener { press(it) { info?.hangUp?.invoke() } }
     }
 
-    fun bind(info: Info.Call) {
-        openCallScreen = info.openCallScreen
+    fun bind(call: Info.Call) {
+        info = call
         refresh()
     }
 
+    private fun press(v: View, run: () -> Unit) {
+        v.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        v.animate().scaleX(0.88f).scaleY(0.88f).setDuration(70).withEndAction {
+            v.animate().scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(android.view.animation.OvershootInterpolator(3f)).start()
+        }.start()
+        run()
+        // Route and mute changes land asynchronously; read them back a beat later.
+        postDelayed({ refresh() }, 180)
+    }
+
     private fun volumeButton(icon: Int, direction: Int) = ImageView(context).apply {
-        show(context.getDrawable(icon), Island.Shape.NONE, Palette.WHITE)
-        val p = dpi(9f)
+        show(context.getDrawable(icon), Island.Shape.NONE, Palette.TEXT2)
+        val p = dpi(8f)
         setPadding(p, p, p, p)
         background = ripple(null)
         setOnClickListener {
@@ -214,42 +238,41 @@ class CallControlsView(context: Context) : LinearLayout(context) {
         }
     }
 
-    private fun routeLabel(d: AudioDeviceInfo): Pair<String, Int>? = when (d.type) {
-        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Phone" to R.drawable.ic_call
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Speaker" to R.drawable.ic_speaker
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET -> "Bluetooth" to R.drawable.ic_bluetooth
-        AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-        AudioDeviceInfo.TYPE_USB_HEADSET -> "Headset" to R.drawable.ic_headset
-        else -> null
+    private class Route(val device: AudioDeviceInfo, val label: String, val icon: Int)
+
+    private fun routes(): List<Route> {
+        val seen = HashSet<String>()
+        return am.availableCommunicationDevices.mapNotNull { d ->
+            val (label, icon) = when (d.type) {
+                AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Phone" to R.drawable.ic_call
+                AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Speaker" to R.drawable.ic_speaker
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET -> "Bluetooth" to R.drawable.ic_bluetooth
+                AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_USB_HEADSET -> "Headset" to R.drawable.ic_headset
+                else -> return@mapNotNull null
+            }
+            if (seen.add(label)) Route(d, label, icon) else null
+        }
+    }
+
+    private fun nextRoute() {
+        val all = routes()
+        if (all.isEmpty()) return
+        val i = all.indexOfFirst { it.device.id == am.communicationDevice?.id }
+        am.setCommunicationDevice(all[(i + 1) % all.size].device)
     }
 
     private fun refresh() {
-        buttons.removeAllViews()
         val muted = am.isMicrophoneMute
-        buttons.addView(control(if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic, if (muted) "Muted" else "Mute", muted) {
-            am.isMicrophoneMute = !muted
-        })
-        val current = am.communicationDevice
-        val seen = HashSet<String>()
-        for (d in am.availableCommunicationDevices) {
-            val (label, icon) = routeLabel(d) ?: continue
-            if (!seen.add(label)) continue
-            buttons.addView(control(icon, label, current?.id == d.id) { am.setCommunicationDevice(d) })
-        }
-        openCallScreen?.let { open -> buttons.addView(control(R.drawable.ic_dialpad, "Keypad", false) { open() }) }
+        mute.set(if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic, if (muted) "Muted" else "Mute", muted)
+        val current = routes().firstOrNull { it.device.id == am.communicationDevice?.id }
+        route.set(current?.icon ?: R.drawable.ic_speaker, current?.label ?: "Audio", current != null && current.label != "Phone")
+        keypad.visibility = if (info?.openCallScreen == null) GONE else VISIBLE
+        keypad.set(R.drawable.ic_dialpad, "Keypad", false)
+        end.visibility = if (info?.hangUp == null) GONE else VISIBLE
+        end.set(R.drawable.ic_call_end, "End", false, fill = Palette.RED)
         val max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1)
         volume.fraction = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat() / max
-    }
-
-    private fun control(icon: Int, label: String, active: Boolean, run: () -> Unit) = ControlButton(context).apply {
-        set(icon, label, active)
-        layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        circle.setOnClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-            run()
-            // Route and mute changes land asynchronously; read them back a beat later.
-            postDelayed({ refresh() }, 180)
-        }
     }
 }
 

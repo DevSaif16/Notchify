@@ -57,8 +57,8 @@ sealed interface Info {
         val tracker: Drawable?,
     ) : Info
 
-    /** Ongoing call: audio route, mic and volume. */
-    class Call(val openCallScreen: (() -> Unit)?) : Info
+    /** Ongoing call: mic, audio route, keypad, hang-up and volume, in one compact block. */
+    class Call(val openCallScreen: (() -> Unit)?, val hangUp: (() -> Unit)?) : Info
 
     class Torch(val level: Int, val max: Int, val setLevel: (Int) -> Unit) : Info
 

@@ -356,7 +356,13 @@ class NotchService : AccessibilityService(), Hub.Listener, IslandView.Host,
     // ---- control centre -------------------------------------------------------------------------
 
     private val quick by lazy {
-        QuickControls(this, { torchOn }, ::setTorch) { intent ->
+        val screenshot = {
+            collapse()
+            // Let the island fold away first so it isn't in the picture.
+            main.postDelayed({ performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT) }, 450)
+            Unit
+        }
+        QuickControls(this, { torchOn }, ::setTorch, screenshot) { intent ->
             runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             collapse()
         }
